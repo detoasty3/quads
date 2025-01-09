@@ -63,8 +63,10 @@ fn iteration(
             best_hand,
         );
         // You can assume the first 4 cards are selected since any optimal
-        // solution contains a quad, and then you can assume the 5th and 6th
-        // cards are selected because of symmetry.
+        // solution contains a quad. Then, you can assume the 5th card is
+        // selected because of symmetry, and that argument doesn't actually
+        // work for the 6th card but it's still true for more complicated
+        // reasons.
         if next_index >= 6 {
             // Try not adding the card at `next_index`.
             iteration(
