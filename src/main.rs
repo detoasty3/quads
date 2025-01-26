@@ -21,8 +21,8 @@ use clap::{Parser, Subcommand};
 /// `target_quads` is the desired number of quads, if not searching for the
 /// maximum.
 /// `best_score` is the highest number of quads in a hand found so far when
-/// searching for the maximum number of quads, or whether a valid hand has been
-/// found when searching for a specific number of quads.
+/// searching for the maximum number of quads, or the lowest max card when
+/// searching for a specific number of quads.
 /// `best_table` is the hand that led to `best_score`.
 ///
 /// Returns `None` if an obviously optimal solution has been found and
@@ -30,10 +30,10 @@ use clap::{Parser, Subcommand};
 fn search_inner(
     hand: u128,
     differences: [u8; 128],
-    next_index: u8,
-    max_index: u8,
-    cards_in_hand: u8,
-    cards_to_add: u8,
+    next_index: usize,
+    max_index: usize,
+    cards_in_hand: usize,
+    cards_to_add: usize,
     quads: u64,
     target_quads: Option<u64>,
     best_score: &mut u64,
@@ -58,18 +58,14 @@ fn search_inner(
     if cards_to_add > 1 {
         let mut differences2 = differences.clone();
         let mut quads2 = quads;
-        let mut good = true;
         for i in 0..next_index {
-            let difference = (i ^ next_index) as usize;
+            let difference = i ^ next_index;
             if (hand >> i) & 1 == 1 {
                 // If there's a pair of cards in the hand with XOR x, and you
                 // add a new card which has XOR x with some other card in the
                 // hand, then those four cards form a quad. This counts each
                 // quad three times, so we divide by three later.
                 quads2 += differences2[difference] as u64;
-                if differences2[difference] > 1 {
-                    // good = false;
-                }
                 differences2[difference] += 1;
             }
         }
@@ -77,7 +73,7 @@ fn search_inner(
         // quads.
         // Note that `quads2` triple-counts quads, so we need to multiply
         // `target` by 3.
-        if target_quads.is_none_or(|target| quads2 <= target * 3) && good {
+        if target_quads.is_none_or(|target| quads2 <= target * 3) {
             search_inner(
                 hand | (1 << next_index),
                 differences2,
@@ -132,14 +128,15 @@ fn search_inner(
             let mut quads2 = quads;
             for i in 0..next_index {
                 if (hand >> i) & 1 == 1 {
-                    quads2 += differences[(i ^ j) as usize] as u64;
+                    quads2 += differences[i ^ j] as u64;
                 }
             }
             // Quads are triple-counted, so divide by 3.
             let real_quads = quads2 / 3;
             if let Some(target) = target_quads {
-                if real_quads == target && *best_score == 0 {
-                    *best_score = 1;
+                let j2 = j as u64;
+                if real_quads == target && j2 < *best_score {
+                    *best_score = j2;
                     *best_hand = hand | (1 << j);
                 }
             } else {
@@ -161,9 +158,13 @@ fn search_inner(
 /// maximum.
 ///
 /// Returns the best hand and its score.
-fn search(cards_in_deck: u8, cards_in_hand: u8, target_quads: Option<u64>) -> (u128, u64) {
+fn search(cards_in_deck: usize, cards_in_hand: usize, target_quads: Option<u64>) -> (u128, u64) {
     let mut best_hand = (1 << cards_in_hand) - 1;
-    let mut best_score = 0;
+    let mut best_score = if target_quads == None {
+        0
+    } else {
+        cards_in_deck as u64
+    };
     search_inner(
         0,
         [0; 128],
@@ -191,10 +192,10 @@ enum Commands {
     #[command(arg_required_else_help = true)]
     Search {
         /// Number of cards in the hand (increase this slowly, start with 9)
-        cards_in_hand: u8,
+        cards_in_hand: usize,
         /// Number of cards in the deck (max 128)
         #[arg(default_value_t = 128)]
-        cards_in_deck: u8,
+        cards_in_deck: usize,
         /// Number of quads the hand should have. If not specified, searches for the maximum possible number of quads.
         target_quads: Option<u64>,
     },
@@ -202,10 +203,10 @@ enum Commands {
     #[command(arg_required_else_help = true)]
     SearchAll {
         /// Initial hand size
-        initial_cards_in_hand: u8,
+        initial_cards_in_hand: usize,
         /// Number of cards in the deck (max 128)
         #[arg(default_value_t = 128)]
-        cards_in_deck: u8,
+        cards_in_deck: usize,
     },
 }
 
@@ -272,7 +273,7 @@ fn main() {
                             }
                             let (best_hand, best_score) =
                                 search(cards_in_deck, cards_in_hand, Some(j as u64));
-                            if best_score > 0 {
+                            if best_score < cards_in_deck as u64 {
                                 results
                                     .lock()
                                     .unwrap()
