@@ -1,5 +1,8 @@
 use std::{
-    sync::atomic::{AtomicI64, Ordering},
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Mutex,
+    },
     thread,
     time::Instant,
 };
@@ -9,9 +12,10 @@ use clap::{Parser, Subcommand};
 /// Search for a hand.
 ///
 /// `hand` is the current partial hand, represented as a bitvector.
-/// `distances[i]` is the number of pairs of cards in the hand whose XOR is `i`.
+/// `differences[i]` is the number of pairs of cards in the hand whose XOR is `i`.
 /// `next_index` is the next card to (maybe) add.
 /// `max_index` is the size of the deck.
+/// `cards_in_hand` is the number of cards in the final hand.
 /// `cards_to_add` is the number of cards left to add.
 /// `quads` is the number of quads in the current partial hand times 3.
 /// `target_quads` is the desired number of quads, if not searching for the
@@ -25,9 +29,10 @@ use clap::{Parser, Subcommand};
 /// `Some(())` if not.
 fn search_inner(
     hand: u128,
-    distances: [u8; 128],
+    differences: [u8; 128],
     next_index: u8,
     max_index: u8,
+    cards_in_hand: u8,
     cards_to_add: u8,
     quads: u64,
     target_quads: Option<u64>,
@@ -51,28 +56,34 @@ fn search_inner(
         return Some(());
     }
     if cards_to_add > 1 {
-        let mut distances2 = distances.clone();
+        let mut differences2 = differences.clone();
         let mut quads2 = quads;
+        let mut good = true;
         for i in 0..next_index {
+            let difference = (i ^ next_index) as usize;
             if (hand >> i) & 1 == 1 {
                 // If there's a pair of cards in the hand with XOR x, and you
                 // add a new card which has XOR x with some other card in the
                 // hand, then those four cards form a quad. This counts each
                 // quad three times, so we divide by three later.
-                quads2 += distances2[(i ^ next_index) as usize] as u64;
-                distances2[(i ^ next_index) as usize] += 1;
+                quads2 += differences2[difference] as u64;
+                if differences2[difference] > 1 {
+                    // good = false;
+                }
+                differences2[difference] += 1;
             }
         }
         // Try adding the card at `next_index`, if that doesn't create too many
         // quads.
         // Note that `quads2` triple-counts quads, so we need to multiply
         // `target` by 3.
-        if target_quads.is_none_or(|target| quads2 <= target * 3) {
+        if target_quads.is_none_or(|target| quads2 <= target * 3) && good {
             search_inner(
                 hand | (1 << next_index),
-                distances2,
+                differences2,
                 next_index + 1,
                 max_index,
+                cards_in_hand,
                 cards_to_add - 1,
                 quads2,
                 target_quads,
@@ -80,21 +91,34 @@ fn search_inner(
                 best_hand,
             )?;
         }
+        let cards_in_hand2 = cards_in_hand as u64;
         // By symmetry, any solution for anything can be assumed to contain
         // the first 3 cards.
         // For everything except caps, you can assume the first 4 cards are
         // selected since any optimal solution contains a quad. Then, you can
         // assume the 5th card is selected because of symmetry.
-        // If you're searching for hands with at least 3 quads, you can assume
-        // the sixth card is selected as well for more complicated reasons.
-        let initial_segment_length = [3, 5, 5, 6][target_quads.unwrap_or(3).min(3) as usize];
+        // If you're searching for hands with the maximum number of quads
+        // (or just enough quads) you can assume the sixth card is selected as
+        // well for more complicated reasons.
+        let initial_segment_length = match target_quads {
+            Some(0) => 3,
+            Some(target) => {
+                if target > (cards_in_hand2 * (cards_in_hand2 - 1)) / 2 {
+                    6
+                } else {
+                    5
+                }
+            }
+            None => 6,
+        };
         if next_index >= initial_segment_length {
             // Try not adding the card at `next_index`.
             search_inner(
                 hand,
-                distances,
+                differences,
                 next_index + 1,
                 max_index,
+                cards_in_hand,
                 cards_to_add,
                 quads,
                 target_quads,
@@ -108,7 +132,7 @@ fn search_inner(
             let mut quads2 = quads;
             for i in 0..next_index {
                 if (hand >> i) & 1 == 1 {
-                    quads2 += distances[(i ^ j) as usize] as u64;
+                    quads2 += differences[(i ^ j) as usize] as u64;
                 }
             }
             // Quads are triple-counted, so divide by 3.
@@ -117,8 +141,6 @@ fn search_inner(
                 if real_quads == target && *best_score == 0 {
                     *best_score = 1;
                     *best_hand = hand | (1 << j);
-                    // Solution found, so stop.
-                    return None;
                 }
             } else {
                 if real_quads > *best_score {
@@ -147,6 +169,7 @@ fn search(cards_in_deck: u8, cards_in_hand: u8, target_quads: Option<u64>) -> (u
         [0; 128],
         0,
         cards_in_deck,
+        cards_in_hand,
         cards_in_hand,
         0,
         target_quads,
@@ -239,6 +262,7 @@ fn main() {
                     println!("{best_score} quads");
                 }
                 let target = AtomicI64::new((best_score - 1) as i64);
+                let results = Mutex::new(vec![]);
                 thread::scope(|s| {
                     for _tid in 0..threads {
                         s.spawn(|| loop {
@@ -249,14 +273,19 @@ fn main() {
                             let (best_hand, best_score) =
                                 search(cards_in_deck, cards_in_hand, Some(j as u64));
                             if best_score > 0 {
-                                println!(
-                                    "{j} quads with max card {}",
-                                    best_hand.checked_ilog2().unwrap()
-                                );
+                                results
+                                    .lock()
+                                    .unwrap()
+                                    .push((j, best_hand.checked_ilog2().unwrap()));
                             }
                         });
                     }
-                })
+                });
+                let mut results = results.into_inner().unwrap();
+                results.sort_by_key(|x| -x.0);
+                for (j, max) in results {
+                    println!("{j} quads with max card {max}");
+                }
             }
         }
     }
