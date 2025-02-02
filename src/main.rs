@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 ///
 /// `hand` is the current partial hand, represented as a bitvector.
 /// `differences[i]` is the number of pairs of cards in the hand whose XOR is `i`.
+/// `min_diff_count` is the minimum allowed second entry in `differences`.
 /// `max_diff_count` is the maximum allowed entry in `differences`.
 /// `next_index` is the next card to (maybe) add.
 /// `max_index` is the size of the deck.
@@ -31,6 +32,7 @@ use clap::{Parser, Subcommand};
 fn search_inner(
     hand: u128,
     differences: [u8; 128],
+    min_diff_count: usize,
     max_diff_count: usize,
     next_index: usize,
     max_index: usize,
@@ -85,6 +87,7 @@ fn search_inner(
             search_inner(
                 hand | (1 << next_index),
                 differences2,
+                min_diff_count,
                 max_diff_count,
                 next_index + 1,
                 max_index,
@@ -96,15 +99,12 @@ fn search_inner(
                 best_hand,
             )?;
         }
-        // Always include the first two `max_diff_count * 2` cards, since any
-        // solution which achieves `max_diff_count` is equivalent by symmetry
-        // to one that includes those cards, and any solution which doesn't is
-        // detected by another call in `search`.
-        if next_index >= max_diff_count * 2 {
+        if next_index >= min_diff_count * 2 {
             // Try not adding the card at `next_index`.
             search_inner(
                 hand,
                 differences,
+                min_diff_count,
                 max_diff_count,
                 next_index + 1,
                 max_index,
@@ -150,6 +150,7 @@ fn search_inner(
 ///
 /// `hand` is the current partial hand, represented as a bitvector.
 /// `differences[i]` is the number of pairs of cards in the hand whose XOR is `i`.
+/// `min_diff_count` is the minimum allowed second entry in `differences`.
 /// `max_diff_count` is the maximum allowed entry in `differences`.
 /// `next_index` is the next card to (maybe) add.
 /// `max_index` is the size of the deck.
@@ -160,6 +161,7 @@ fn search_inner(
 fn search_inner_multi(
     hand: u128,
     differences: [u8; 128],
+    min_diff_count: usize,
     max_diff_count: usize,
     next_index: usize,
     max_index: usize,
@@ -209,6 +211,7 @@ fn search_inner_multi(
             search_inner_multi(
                 hand | (1 << next_index),
                 differences2,
+                min_diff_count,
                 max_diff_count,
                 next_index + 1,
                 max_index,
@@ -218,15 +221,12 @@ fn search_inner_multi(
                 best_scores,
             );
         }
-        // Always include the first two `max_diff_count * 2` cards, since any
-        // solution which achieves `max_diff_count` is equivalent by symmetry
-        // to one that includes those cards, and any solution which doesn't is
-        // detected by another call in `search`.
-        if next_index >= max_diff_count * 2 {
+        if next_index >= min_diff_count * 2 {
             // Try not adding the card at `next_index`.
             search_inner_multi(
                 hand,
                 differences,
+                min_diff_count,
                 max_diff_count,
                 next_index + 1,
                 max_index,
@@ -273,34 +273,82 @@ fn search(cards_in_deck: usize, cards_in_hand: usize, target_quads: Option<u64>)
     } else {
         cards_in_deck as u64
     };
-    let min_max_diff_count = match target_quads {
-        None => 3,
-        Some(target) => {
-            if target > (cards_in_hand * (cards_in_hand + 1) / 12) as u64 {
-                3
-            } else if target > 0 {
-                2
-            } else {
-                1
-            }
+    // let min_max_diff_count = match target_quads {
+    //     None => 3,
+    //     Some(target) => {
+    //         if target > (cards_in_hand * (cards_in_hand + 1) / 12) as u64 {
+    //             3
+    //         } else if target > 0 {
+    //             2
+    //         } else {
+    //             1
+    //         }
+    //     }
+    // }
+    // .min(cards_in_hand / 2);
+    // for max_diff_count in min_max_diff_count..=(cards_in_hand / 2) {
+    //     search_inner(
+    //         0,
+    //         [0; 128],
+    //         max_diff_count,
+    //         0,
+    //         cards_in_deck,
+    //         cards_in_hand,
+    //         cards_in_hand,
+    //         0,
+    //         target_quads,
+    //         &mut best_score,
+    //         &mut best_hand,
+    //     );
+    // }
+    if let Some(target) = target_quads {
+        if target == 0 {
+            search_inner(
+                0,
+                [0; 128],
+                1,
+                1,
+                0,
+                cards_in_deck,
+                cards_in_hand,
+                cards_in_hand,
+                0,
+                target_quads,
+                &mut best_score,
+                &mut best_hand,
+            );
+        }
+        if target <= (cards_in_hand * (cards_in_hand + 1) / 12) as u64 {
+            search_inner(
+                0,
+                [0; 128],
+                2,
+                2,
+                0,
+                cards_in_deck,
+                cards_in_hand,
+                cards_in_hand,
+                0,
+                target_quads,
+                &mut best_score,
+                &mut best_hand,
+            );
         }
     }
-    .min(cards_in_hand / 2);
-    for max_diff_count in min_max_diff_count..=(cards_in_hand / 2) {
-        search_inner(
-            0,
-            [0; 128],
-            max_diff_count,
-            0,
-            cards_in_deck,
-            cards_in_hand,
-            cards_in_hand,
-            0,
-            target_quads,
-            &mut best_score,
-            &mut best_hand,
-        );
-    }
+    search_inner(
+        0,
+        [0; 128],
+        3,
+        cards_in_deck / 2,
+        0,
+        cards_in_deck,
+        cards_in_hand,
+        cards_in_hand,
+        0,
+        target_quads,
+        &mut best_score,
+        &mut best_hand,
+    );
     (best_hand, best_score)
 }
 
@@ -314,19 +362,42 @@ fn search(cards_in_deck: usize, cards_in_hand: usize, target_quads: Option<u64>)
 fn search_multi(mut cards_in_deck: usize, cards_in_hand: usize) -> Vec<u64> {
     let mut ret = vec![];
     while cards_in_deck > 0 && cards_in_deck >= cards_in_hand {
-        for max_diff_count in 1..=(cards_in_hand / 2) {
-            search_inner_multi(
-                0,
-                [0; 128],
-                max_diff_count,
-                0,
-                cards_in_deck,
-                0,
-                cards_in_hand,
-                0,
-                &mut ret,
-            );
-        }
+        search_inner_multi(
+            0,
+            [0; 128],
+            1,
+            1,
+            0,
+            cards_in_deck,
+            0,
+            cards_in_hand,
+            0,
+            &mut ret,
+        );
+        search_inner_multi(
+            0,
+            [0; 128],
+            2,
+            2,
+            0,
+            cards_in_deck,
+            0,
+            cards_in_hand,
+            0,
+            &mut ret,
+        );
+        search_inner_multi(
+            0,
+            [0; 128],
+            3,
+            cards_in_deck / 2,
+            0,
+            cards_in_deck,
+            0,
+            cards_in_hand,
+            0,
+            &mut ret,
+        );
         // Make sure we don't miss a solution with lower dimension than the
         // first one
         cards_in_deck /= 2;
@@ -361,6 +432,8 @@ enum Commands {
         /// Number of cards in the deck (max 128)
         #[arg(default_value_t = 128)]
         cards_in_deck: usize,
+        /// Maximum hand size
+        max_cards_in_hand: Option<usize>,
     },
 }
 
@@ -403,29 +476,20 @@ fn main() {
         Commands::SearchAll {
             initial_cards_in_hand,
             cards_in_deck,
+            max_cards_in_hand,
         } => {
+            let max_cards_in_hand = max_cards_in_hand.unwrap_or(cards_in_deck);
             let threads = thread::available_parallelism()
                 .map(|x| x.get())
                 .unwrap_or(1);
             println!("Threads: {threads}");
-            // for cards_in_hand in initial_cards_in_hand..=cards_in_deck {
-            //     println!("Hand size {cards_in_hand}, deck size {cards_in_deck}:");
-            //     for (j, &max) in search_multi(cards_in_deck, cards_in_hand)
-            //         .iter()
-            //         .enumerate()
-            //     {
-            //         if max < cards_in_deck as u64 {
-            //             println!("{j} quads with max card {max}");
-            //         }
-            //     }
-            // }
             let cards_in_hand_atomic = AtomicUsize::new(initial_cards_in_hand);
             let print_guard = Mutex::new(());
             thread::scope(|s| {
                 for _tid in 0..threads {
                     s.spawn(|| loop {
                         let cards_in_hand = cards_in_hand_atomic.fetch_add(1, Ordering::Relaxed);
-                        if cards_in_hand > cards_in_deck {
+                        if cards_in_hand > max_cards_in_hand {
                             break;
                         }
                         let res = search_multi(cards_in_deck, cards_in_hand);
